@@ -102,6 +102,28 @@ class GPT2Model(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+    def forward(self, idx, targets=None):
+        # idx is of shape (B, T)
+        B, T = idx.size()
+        assert (
+            T <= self.config.block_size
+        ), f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
+        # forward the token and posisition embeddings
+        pos = torch.arange(0, T, dtype=torch.long, device=idx.device)  # shape (T)
+        pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (T, n_embd)
+        tok_emb = self.transformer.wte(idx)  # token embeddings of shape (B, T, n_embd)
+        x = tok_emb + pos_emb
+        # forward the blocks of the transformer
+        for block in self.transformer.h:
+            x = block(x)
+        # forward the final layernorm and the classifier
+        x = self.transformer.ln_f(x)
+        logits = self.lm_head(x)  # (B, T, vocab_size)
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
+
     @classmethod
     def from_pretrained(cls, model_type):
         """Loads pretrained GPT-2 model weights from huggingface"""
@@ -178,3 +200,23 @@ class GPT2Config:
 if __name__ == "__main__":
     model = GPT2Model.from_pretrained("gpt2")
     print("Model init success")
+
+    model = model.eval()
+    # model.to("cuda")
+    max_return_sequences = 5
+    max_length = 30
+
+    import tiktoken
+
+    enc = tiktoken.get_encoding("gpt2")
+    tokens = enc.encode("Hello, I'm a language model.")
+    tokens = torch.tensor(tokens, dtype=torch.long)  # (8,)
+    tokens = tokens.unqueeze(0).repeat(num_return_sequences, 1)
+
+    torch.manual_seed(42)
+
+    for i in max_return_sequences:
+        #
+        with torch.no_grad():
+            logits = model(x)
+            
